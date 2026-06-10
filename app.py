@@ -1557,6 +1557,18 @@ def key_mask(df: pd.DataFrame, team_col: str, name_col: str, keys: set[Tuple[str
     pairs = pd.Series(list(zip(df[team_col].astype(str), df[name_col].astype(str))), index=df.index)
     return pairs.isin(keys)
 
+def restrict_team_rows(df: pd.DataFrame, teams: Sequence[str], team_col: str = "team") -> pd.DataFrame:
+    """讓團隊摘要表嚴格遵守左側所屬球隊篩選。"""
+    if df is None or df.empty or not teams or team_col not in df.columns:
+        return df
+    team_set = {str(team) for team in teams}
+    return df[df[team_col].astype(str).isin(team_set)].copy()
+
+
+def has_sort_column(df: pd.DataFrame, column: str) -> bool:
+    """避免空表或缺欄位時 sort_values 造成 KeyError。"""
+    return df is not None and not df.empty and column in df.columns
+
 
 
 # =========================
@@ -2558,7 +2570,7 @@ st.markdown(
 
 with st.sidebar:
     st.header("資料來源")
-    st.caption("版本：v4.3｜得點圈數據｜圖例外移不重疊｜記憶體快取｜PR表對齊")
+    st.caption("版本：v4.4｜未出賽提示｜得點圈隊伍篩選修正｜手機欄位說明")
     st.caption("提示：把滑鼠移到表格欄名上，可看到該數據的公式與用途。")
     st.caption(f"球速統計會排除低於 {VALID_VELO_MIN} 或高於 {VALID_VELO_MAX} km/h 的異常值；進壘點座標絕對值超過 {VALID_COORD_ABS_LIMIT} 也會排除。")
     if MATPLOTLIB_CHINESE_FONT:
@@ -2839,6 +2851,14 @@ team_risp_pitch = risp_summary_from_pa(
     {"defenseTeam": "team"},
 )
 
+# 得點圈摘要需要再套一次「所屬球隊」限制。
+# 因為 fpa 為了保留對戰情境，前面會保留 offenseTeam 或 defenseTeam 命中的 PA；
+# 若這裡不再限制 team，會把對手球隊的得點圈資料也列出來。
+if selected_teams:
+    risp_batters_agg = restrict_team_rows(risp_batters_agg, selected_teams)
+    risp_pitchers_agg = restrict_team_rows(risp_pitchers_agg, selected_teams)
+    team_risp_bat = restrict_team_rows(team_risp_bat, selected_teams)
+    team_risp_pitch = restrict_team_rows(team_risp_pitch, selected_teams)
 
 
 # =========================
@@ -3039,6 +3059,9 @@ if page == "系列賽總覽":
         ]
     )
 
+    if total_games == 0:
+        st.info("目前篩選條件下未出賽，所以本頁團隊打擊、團隊投球、得點圈與擊球品質不會顯示數據。")
+
     st.markdown("### 每場比分")
     show_dataframe(fgames[["G", "date", "stadium", "awayTeam", "awayRuns", "homeRuns", "homeTeam", "winner"]].sort_values("G"))
 
@@ -3077,12 +3100,15 @@ if page == "系列賽總覽":
                 }
             )
         team_overview = pd.DataFrame(team_rows)
-        show_dataframe(
-            clean_display_df(
-                team_overview.sort_values(["W%", "分差/G"], ascending=[False, False]),
-                rate_cols=["W%", "得分/G", "失分/G", "分差/G"],
+        if team_overview.empty or not {"W%", "分差/G"}.issubset(team_overview.columns):
+            st.info("目前篩選條件下未出賽，沒有球隊得分與勝敗資料。")
+        else:
+            show_dataframe(
+                clean_display_df(
+                    team_overview.sort_values(["W%", "分差/G"], ascending=[False, False]),
+                    rate_cols=["W%", "得分/G", "失分/G", "分差/G"],
+                )
             )
-        )
 
     with col2:
         st.markdown("### 場均每局得分")
@@ -3137,27 +3163,37 @@ if page == "系列賽總覽":
 
     st.markdown("### 團隊打擊")
     team_bat = team_batting_from_box(fbatters_game)
-    show_dataframe(
-        clean_display_df(
-            team_bat.sort_values("OPS", ascending=False),
-            cols=["team", "G", "PA", "PA/G", "AB", "R", "R/G", "H", "H/G", "2B", "2B/G", "3B", "3B/G", "HR", "HR/G", "RBI", "RBI/G", "BB", "BB/G", "SO", "SO/G", "SB", "SB/G", "CS", "CS/G", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"],
-            rate_cols=["PA/G", "R/G", "H/G", "2B/G", "3B/G", "HR/G", "RBI/G", "BB/G", "SO/G", "SB/G", "CS/G", "AVG", "OBP", "SLG", "OPS"],
-            pct_cols=["BB%", "K%"],
-        ),
-        height=360,
-    )
+    team_bat = restrict_team_rows(team_bat, selected_teams)
+
+    if not has_sort_column(team_bat, "OPS"):
+        st.info("目前篩選條件下未出賽，沒有團隊打擊資料。")
+    else:
+        show_dataframe(
+            clean_display_df(
+                team_bat.sort_values("OPS", ascending=False),
+                cols=["team", "G", "PA", "PA/G", "AB", "R", "R/G", "H", "H/G", "2B", "2B/G", "3B", "3B/G", "HR", "HR/G", "RBI", "RBI/G", "BB", "BB/G", "SO", "SO/G", "SB", "SB/G", "CS", "CS/G", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"],
+                rate_cols=["PA/G", "R/G", "H/G", "2B/G", "3B/G", "HR/G", "RBI/G", "BB/G", "SO/G", "SB/G", "CS/G", "AVG", "OBP", "SLG", "OPS"],
+                pct_cols=["BB%", "K%"],
+            ),
+            height=360,
+        )
 
     st.markdown("### 團隊投球")
     team_pitch = team_pitching_from_box(fpitchers_game)
-    show_dataframe(
-        clean_display_df(
-            team_pitch.sort_values("ERA"),
-            cols=["team", "G", "IP顯示", "IP/G", "NP", "NP/G", "BF", "BF/G", "H", "H/G", "HR", "HR/G", "BB", "BB/G", "HB", "HB/G", "SO", "SO/G", "R", "R/G", "ER", "ER/G", "ERA", "WHIP", "K%", "BB%", "K-BB%", "NP/IP"],
-            rate_cols=["IP/G", "NP/G", "BF/G", "H/G", "HR/G", "BB/G", "HB/G", "SO/G", "R/G", "ER/G", "ERA", "WHIP", "NP/IP"],
-            pct_cols=["K%", "BB%", "K-BB%"],
-        ),
-        height=360,
-    )
+    team_pitch = restrict_team_rows(team_pitch, selected_teams)
+
+    if not has_sort_column(team_pitch, "ERA"):
+        st.info("目前篩選條件下未出賽，沒有團隊投球資料。")
+    else:
+        show_dataframe(
+            clean_display_df(
+                team_pitch.sort_values("ERA"),
+                cols=["team", "G", "IP顯示", "IP/G", "NP", "NP/G", "BF", "BF/G", "H", "H/G", "HR", "HR/G", "BB", "BB/G", "HB", "HB/G", "SO", "SO/G", "R", "R/G", "ER", "ER/G", "ERA", "WHIP", "K%", "BB%", "K-BB%", "NP/IP"],
+                rate_cols=["IP/G", "NP/G", "BF/G", "H/G", "HR/G", "BB/G", "HB/G", "SO/G", "R/G", "ER/G", "ERA", "WHIP", "NP/IP"],
+                pct_cols=["K%", "BB%", "K-BB%"],
+            ),
+            height=360,
+        )
 
     st.markdown("### 團隊得點圈攻守")
     risp_col1, risp_col2 = st.columns(2)
@@ -3192,23 +3228,45 @@ if page == "系列賽總覽":
 
     st.markdown("### 團隊擊球品質")
     team_batted = team_batted_ball_summary(fpa, fgames)
-    if team_batted.empty:
-        st.info("目前沒有可用的擊球品質資料。")
+    team_batted = restrict_team_rows(team_batted, selected_teams)
+
+    if not has_sort_column(team_batted, "HardHit%"):
+        st.info("目前篩選條件下沒有可用的擊球品質資料。")
     else:
         show_dataframe(
             clean_display_df(
                 team_batted.sort_values("HardHit%", ascending=False),
-                cols=["team", "G", "BIP", "BIP/G", "H", "HR", "hardHit", "HardHit%", "groundBall", "GB%", "lineDrive", "LD%", "flyBall", "FB%", "popup", "Popup%", "WPA", "WPA/G", "RE24", "RE24/G"],
-                rate_cols=["BIP/G", "WPA", "WPA/G", "RE24", "RE24/G"],
-                pct_cols=["HardHit%", "GB%", "LD%", "FB%", "Popup%"],
+                cols=[
+                    "team", "G",
+                    "BIP", "BIP/G",
+                    "H", "HR",
+                    "hardHit", "HardHit%",
+                    "groundBall", "GB%",
+                    "lineDrive", "LD%",
+                    "flyBall", "FB%",
+                    "popup", "Popup%",
+                    "WPA", "WPA/G",
+                    "RE24", "RE24/G",
+                ],
+                rate_cols=[
+                    "BIP/G",
+                    "WPA", "WPA/G",
+                    "RE24", "RE24/G",
+                ],
+                pct_cols=[
+                    "HardHit%",
+                    "GB%", "LD%", "FB%", "Popup%",
+                ],
             ),
             height=360,
         )
 
     st.markdown("### 團隊投球事件")
     team_pitch_event = team_pitch_event_summary(fevents, fgames)
-    if team_pitch_event.empty:
-        st.info("目前沒有可用的投球事件資料。")
+    team_pitch_event = restrict_team_rows(team_pitch_event, selected_teams)
+
+    if not has_sort_column(team_pitch_event, "Strike%"):
+        st.info("目前篩選條件下沒有可用的投球事件資料。")
     else:
         show_dataframe(
             clean_display_df(
