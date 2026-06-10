@@ -2454,6 +2454,23 @@ def show_dataframe(df: pd.DataFrame, height: Optional[int] = None, max_rows: Opt
     if isinstance(height, int) and height > 0:
         kwargs["height"] = height
     st.dataframe(display_df, **kwargs)
+    
+    help_rows = []
+    for col in display_df.columns:
+        help_text = get_stat_help(col)
+        if help_text:
+            help_rows.append({
+                "欄位": str(col),
+                "說明": help_text,
+            })
+
+    if help_rows:
+        with st.expander("📘 手機版：查看本表欄位說明"):
+            st.dataframe(
+                pd.DataFrame(help_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def show_plot(fig: Optional[plt.Figure]) -> None:
